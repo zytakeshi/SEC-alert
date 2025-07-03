@@ -1,0 +1,172 @@
+Product Requirements Document (PRD) for SEC Alert Bot, a paid-subscription Telegram bot that delivers real-time, AI-generated fundamentals-focused alerts from U.S. SEC filings. 
+
+⸻
+
+1. Product Overview
+
+SEC Alert Bot connects to the SEC-API Stream WebSocket to capture new EDGAR filings the moment they are posted (average push latency ≈ 2 s)  ￼.
+Raw filing text is fed to Groq’s Chat-Completions API to generate concise, multilingual analyses in seconds  ￼.
+Alerts—containing an emoji signal, 280-char TL;DR, bullet-point impact analysis, and the filing link/PDF—are pushed to paying Telegram subscribers within a 30-second end-to-end SLA.
+
+Primary users are retail traders, professional analysts, and fin-fluencers who need machine-digested insights faster than traditional news feeds.
+
+⸻
+
+2. Goals & Success Metrics
+
+Goal	KPI	Target (T+6 mo)
+Speed	p95 latency filing → alert	≤ 30 s
+Quality	Helpful-rating thumbs-up	≥ 90 %
+Monetization	Monthly Recurring Revenue	≥ US $25 k
+Reliability	Monthly uptime on VPS	≥ 99.9 % (industry VPS providers quote 99.97 %+)  ￼
+Growth	MoM paying-user growth	≥ 15 %
+
+
+⸻
+
+3. User Personas
+	1.	Retail Trader – Emma (JP/EN bilingual, mobile-first)
+	2.	Buy-Side Analyst – Carlos (needs CSV/Webhook export)
+	3.	Fin-fluencer – “StockSensei” (shares charts on X / YouTube Shorts)
+
+⸻
+
+4. Core Features
+
+4.1 Real-Time Filing Ingest
+	•	WebSocket to wss://stream.sec-api.io; keys stored in .env  ￼.
+	•	Filter forms 8-K, 10-K/Q, S-1, 13D/G, 4, DEF 14A.
+	•	Deduplicate per CIK/hash; enqueue to Redis on success; fallback to disk if Redis is unreachable.
+    *Redis Queuing
+	•	sec:filings: RPUSH/BLPOP queue for processing filings
+	•	user:{id}:watchlist: optional caching of user prefs
+	•	ratelimit:{tg_id}: per-user rate-limiting control
+	•	Redis hosted locally via Docker on the VPS (bind: localhost)
+	•	Max memory cap, eviction policy: allkeys-lru
+
+4.2 AI Summaries
+	•	POST to https://api.groq.com/openai/v1/chat/completions  ￼.
+	•	Prompt template: headline ≤ 280 chars, 3–5 impact bullets, “Why it matters”, sentiment flag.
+	•	Languages: EN (default), JP, ZH, ES, PT (beta).
+
+4.3 Alert Delivery
+	•	Telegram Bot API; respect 1 msg/s per-chat and 30 msg/s global limits  ￼.
+	•	Optional paid “mass-broadcast” star boost  ￼.
+	•	Formats: private DM (all tiers) + channel broadcast (group tier).
+
+4.4 User Preferences & Persistence
+	•	Slash-commands: /watch, /unwatch, /lang, /plan.
+	•	Stored in PostgreSQL (ticker cap 50). Redis cache.
+
+4.5 Subscription & Payments
+
+Provider	Method	Notes
+Stripe	Subscriptions API  ￼	Card/Apple Pay/Google Pay
+PayPal	Subscriptions v1  ￼	PayPal balance & cards
+Crypto	CoinPayments
+
+Failed renewals → 3-day grace; soft-lock account thereafter.
+
+4.6 Admin Console
+	•	Web dashboard (Next.js + tRPC) on /admin, secured with OIDC.
+	•	Features: user list, plan override, refund button, alert replay, latency chart.
+
+4.7 Internationalization
+	•	JSON string bundles; fallback to EN.
+
+⸻
+
+5. Non-Functional Requirements
+
+Area	Requirement
+Latency	≤ 30 s filing→alert (p95).
+Hosting	Single KVM-based VPS (e.g., 4 vCPU/8 GB RAM) in US-East for EDGAR proximity; provider with 99.97 % SLA  ￼.
+Scalability	Docker Compose; horizontal scale = additional VPS nodes + HAProxy / Tailscale mesh.
+Security	TLS 1.3; Secrets in docker-secret files; DB at-rest AES-256.
+Compliance	• SEC Rule 17a-4: retain outbound alerts & audit logs ≥ 6 y  ￼ ￼  • GDPR: DSAR endpoints & right-to-erasure workflows  ￼ ￼
+Observability	OpenTelemetry traces shipped to hosted Grafana Cloud  ￼.
+Backup	Nightly pg_dump → encrypted off-site (Backblaze B2).
+Disaster Recovery	RPO = 24 h (backup); RTO = 4 h via cold-standby VPS snapshot.
+Redis health metrics exposed via Redis EXPORTER → Grafana Cloud dashboard (e.g., memory usage, hit/miss, uptime)
+
+
+⸻
+
+6. Technical Architecture
+
+┌──────────┐   WebSocket    ┌────────────┐
+│ EDGAR 🎧 │ ─────────────► │ Ingest svc │──┐
+└──────────┘                └────────────┘  │Push to Redis (Queue: `sec:filings`)
+                                            ▼
+                                   ┌────────────────┐
+                                   │ Groq adapter   │
+                                   └────────────────┘
+                                            │REST
+                                            ▼
+                                   ┌────────────────┐
+                                   │ Alert-builder  │
+                                   └──────┬─────────┘
+                                          │HTTPS
+                                          ▼
+                                  ┌─────────────────┐
+                                  │ Telegram Bot API│
+                                  └─────────────────┘
+
+Storage: **PostgreSQL 15** (users, watchlist, alerts, payments)  
+Infra: Docker Compose on Ubuntu 22.04 VPS; systemd health-checks.
+
+Redis: Cache & Queue
+
+⸻
+
+7. Data Model (simplified)
+	•	users (id, tg_id, email, language, plan, status, created_at)
+	•	watchlist (user_id, symbol)
+	•	alerts (id, cik, form_type, symbol, title, summary_json, sent_at)
+	•	payments (id, user_id, provider, txn_id, amount, currency, status, period_start, period_end)
+
+⸻
+
+8. Milestones & Timeline
+
+Phase	Deliverables	ETA
+M1 – Prototype	Ingest + manual push	Sep 2025
+M2 – Payments MVP	Stripe & PayPal sandbox; auto alerts	Oct 2025
+M3 – Crypto + i18n	USDT payments; JP/ZH language	Nov 2025
+M4 – GA	SLA 99.9 %, marketing site, admin GUI	Dec 2025
+
+
+⸻
+
+9. Risks & Mitigations
+
+Risk	Impact	Mitigation
+VPS outage	Alert gap	Nightly snapshot; fail-over script to secondary VPS
+SEC-API downtime	Data loss	Buffer filings to disk; fallback REST polling  ￼
+LLM latency spikes	Delays	Async queue; retry w/ degraded “headline-only” mode
+Payment fraud	Revenue loss	Stripe 3-D Secure; PayPal dispute API; Coinbase HMAC
+Reg-change	Compliance cost	Quarterly legal review of SEC/GDPR updates
+Redis unavailable  Ingest blocked or cache stale  Disk fallback queue; retry with exponential backoff; Prometheus alert
+
+⸻
+
+10. Analytics & KPIs
+	•	Daily Active Users
+	•	New vs Churned subs
+	•	Avg. latency (ingest → Telegram)
+	•	Groq tokens per user
+	•	Language split, top tickers
+
+⸻
+
+11. Acceptance Criteria
+	•	New 8-K reaches user ≤ 30 s (p95).
+	•	/watch AAPL adds ticker and triggers next filing.
+	•	Payment webhook disables service when overdue.
+	•	Admin can replay any alert for audit.
+	•	All PII encrypted at rest.
+
+⸻
+
+Document owner: zytakeshi
+Last updated: 2025-07-03
